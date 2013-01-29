@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
 
                 start = omp_get_wtime();
                 multiply(A, x, result, rowCount, columnCount, blockSizes[blockSize]);
-                fprintf(stdout, "%d;%d;%d;%lf\n", rowCount, columnCount, blockSizes[blockSize], omp_get_wtime() - start);
+                fprintf(stdout, "%d;%d%d;%lf\n", rowCount, columnCount, blockSizes[blockSize], omp_get_wtime() - start);
             }
 
             for (i = 0; i < rowCount; i++) {

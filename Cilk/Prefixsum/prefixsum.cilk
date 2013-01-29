@@ -1,0 +1,222 @@
+/* 
+ * File:   prefixsum.cilk
+ * Author: Christian Beikov
+ *
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <cilk.h>
+#include <cilk-lib.cilkh>
+
+#define ATYPE int //compile time type, can change
+#define ELEMENTS_STEP 25000000
+#define ELEMENTS 200000000
+#define CUTOFF 50000
+
+cilk void scanRecursive(ATYPE*, int);
+
+void init(ATYPE*, int);
+void verify(ATYPE*, int);
+
+cilk ATYPE upPass(ATYPE *x, int low, int high);
+cilk void downPass(int num, ATYPE *x, int low, int high);
+cilk void scanIterativeLocal(ATYPE *x, ATYPE *y, int taskId, int taskCount, int from, int to);
+cilk void sumIterativeLocal(ATYPE *x, ATYPE *y, int taskId, int from, int to);
+cilk void scanIterative(ATYPE *x, int n);
+
+cilk ATYPE upPass(ATYPE *x, int low, int high) {
+    int i;
+    ATYPE right, sum = 0, temp;
+
+    if (high - low <= CUTOFF) {
+        for (i = low; i <= high; i++) {
+            sum += x[i];
+        }
+
+        x[high] = sum;
+        return x[high];
+    } else {
+		// We need this since cilkc can't handle it otherwise
+        temp = spawn upPass(x, low, (high + low) / 2);
+        right = spawn upPass(x, (high + low) / 2 + 1, high);
+
+		sync;
+		
+        x[high] = x[(high + low) / 2] + right;
+        return x[high];
+    }
+}
+
+cilk void downPass(int num, ATYPE *x, int low, int high) {
+    int i;
+    ATYPE temp, mid;
+
+    if (high - low <= CUTOFF) {
+        if (low != 0) {
+            x[low] += x[low - 1];
+        }
+        for (i = low + 1; i < high; i++) {
+            x[i] += x[i - 1];
+        }
+    } else {
+        temp = num - x[(high + low) / 2];
+        mid = x[(high + low) / 2];
+        x[(high + low) / 2] = x[high] - temp;
+
+        spawn downPass(mid, x, low, (high + low) / 2);
+        spawn downPass(temp, x, (high + low) / 2 + 1, high);
+    }
+}
+
+cilk void scanRecursive(ATYPE *x, int n) {
+	// We need this since cilkc can't handle it otherwise
+    ATYPE val;
+	val = spawn upPass(x, 0, n - 1);
+	sync;
+    spawn downPass(x[n - 1], x, 0, n - 1);
+	sync;
+}
+
+cilk void scanIterativeLocal(ATYPE *x, ATYPE *y, int taskId, int taskCount, int from, int to){
+    int i;
+    
+    for (i = from + 1; i < to; i++) {
+        x[i] += x[i - 1];
+    }
+
+    if (taskId < taskCount) {
+        y[taskId] = x[to - 1];
+    }
+}
+
+cilk void sumIterativeLocal(ATYPE *x, ATYPE *y, int taskId, int from, int to){
+    int i;
+    ATYPE xSum = 0;
+
+    for (i = 0; i <= taskId - 1; i++) {
+        xSum += y[i];
+    }
+
+    for (i = from; i < to; i++) {
+        x[i] += xSum;
+    }
+}
+
+cilk void scanIterative(ATYPE *x, int n) {
+    int restFrom, taskCount;
+    int i, rest, step;
+	int *froms, *tos;
+    ATYPE *y;
+
+    if (n == 1) {
+        return;
+    }
+
+    taskCount = Cilk_active_size - 1;
+	
+	if(taskCount == 0){
+		rest = 0;
+		step = n;
+        taskCount++;
+	} else {
+		rest = n % taskCount;
+		step = n / taskCount;
+	}
+    
+    if(rest != 0){
+        taskCount++;
+		restFrom = step * taskCount;
+    }
+    
+	froms = (int*) malloc(sizeof (int) * taskCount);
+	tos = (int*) malloc(sizeof (int) * taskCount);
+    y = (ATYPE*) malloc(sizeof (ATYPE) * taskCount);
+    
+    for(i = 0; i < taskCount; i++){
+        froms[i] = step * i;
+        tos[i] = step * (i + 1);
+        
+        spawn scanIterativeLocal(x, y, i, taskCount, froms[i], tos[i]);
+    }
+    
+    if(rest != 0){
+        spawn scanIterativeLocal(x, y, taskCount, taskCount, restFrom, n);
+    }
+    
+    sync;
+    
+    for(i = 1; i < taskCount; i++){
+        spawn sumIterativeLocal(x, y, i, froms[i], tos[i]);
+    }
+    
+    if(rest != 0){
+        spawn sumIterativeLocal(x, y, taskCount, restFrom, n);
+    }
+    
+    sync;
+
+	free(froms);
+	free(tos);
+    free(y);
+}
+
+cilk int main(int argc, char** argv) {
+    Cilk_time start;
+    ATYPE *x;
+    int i;
+	
+	// recursive
+    for (i = ELEMENTS_STEP; i <= ELEMENTS; i += ELEMENTS_STEP) {
+        x = (ATYPE*) malloc(sizeof (ATYPE*) * i);
+        init(x, i);
+		
+        start = Cilk_get_wall_time();
+        spawn scanRecursive(x, i);
+		sync;
+        fprintf(stdout, "Recurisve;%d;%d;%f\n", Cilk_active_size, i, Cilk_wall_time_to_sec(Cilk_get_wall_time() - start));
+        verify(x, i);
+
+        free(x);
+    }
+	
+	// iterative
+	for (i = ELEMENTS_STEP; i <= ELEMENTS; i += ELEMENTS_STEP) {
+        x = (ATYPE*) malloc(sizeof (ATYPE*) * i);
+        init(x, i);
+		
+        start = Cilk_get_wall_time();
+        spawn scanIterative(x, i);
+		sync;
+        fprintf(stdout, "Iterative;%d;%d;%f\n", Cilk_active_size, i, Cilk_wall_time_to_sec(Cilk_get_wall_time() - start));
+        verify(x, i);
+
+        free(x);
+    }
+
+    fflush(stdout);
+    return (EXIT_SUCCESS);
+}
+
+void init(ATYPE *x, int j) {
+    int i;
+
+    for (i = 0; i < j; i++) {
+        x[i] = i + 1;
+    }
+}
+
+void verify(ATYPE *x, int j){
+    int i;
+    ATYPE sum = 0;
+    
+    for(i = 0; i < j; i++){
+        sum += i + 1;
+		
+        if(x[i] != sum){
+            fprintf(stdout, "Error in array at index %d, value is %d but should be %d\n", i, x[i], sum);
+			break;
+        }
+        
+    }
+}

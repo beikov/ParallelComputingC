@@ -14,7 +14,7 @@ import java.util.Map;
  *
  * @author Christian Beikov
  */
-public class PrefixSumDataPreparer {
+public class OpenMPPrefixSumDataPreparer {
 
     public static void main(String[] args) {
         try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream("data.csv")));
